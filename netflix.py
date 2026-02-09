@@ -1,85 +1,154 @@
 import streamlit as st
 import pandas as pd
-
-import numpy as np
+import plotly.express as px
 from sklearn.metrics.pairwise import cosine_similarity
 
-# 1. Veri Yükleme (Önceki dosyalardan okuyoruz)
+# ==========================================
+#  BACKEND (HESAPLAMA MOTORU)
+# ==========================================
+
 @st.cache_data
 def load_data():
+    # Veri setlerini oku
     movies = pd.read_csv('movies.csv')
     ratings = pd.read_csv('ratings.csv')
-    return pd.merge(ratings, movies, on='movieId'), movies
+    
+    # Sütun temizliği
+    movies.columns = [c.strip() for c in movies.columns]
+    ratings.columns = [c.strip() for c in ratings.columns]
 
-df, movies_df = load_data()
+    # Başarı Oranı ve Popülerlik Analizi
+    # Ortalama puanı alıp % formatına çeviriyoruz
+    movie_stats = ratings.groupby('movieId')['rating'].agg(['mean', 'count']).reset_index()
+    movie_stats['success_rate'] = (movie_stats['mean'] / 5 * 100).round(1)
+    movies = movies.merge(movie_stats, on='movieId', how='left').fillna(0)
+    
+    return movies, ratings
 
-# Hız için pivot tabloyu oluşturuyoruz (User-Movie Matrix)
-# Satırlar: Kullanıcılar, Sütunlar: Film İsimleri
-user_movie_matrix = df.pivot_table(index='userId', columns='title', values='rating').fillna(0)
+def get_user_profile(user_id, ratings_df, movies_df):
+    """Kullanıcının geçmişini ve karakterini analiz eder"""
+    user_ratings = ratings_df[ratings_df['userId'] == user_id]
+    user_full_data = user_ratings.merge(movies_df, on='movieId')
+    
+    # Hipsterlık Skoru (İzlediği filmlerin ortalama oylanma sayısı)
+    avg_pop = user_full_data['count'].mean()
+    if avg_pop < 60:
+        h_label = "Hipster "
+    elif avg_pop < 100:
+        h_label = "Dengeli "
+    else:
+        h_label = "Popüler "
+        
+    return user_full_data, h_label, avg_pop
 
-st.title("🎬 Zevk İkizi ve Fark Analizi")
+def find_soulmate(target_user_id, ratings_df):
+    """Kullanıcı bazlı işbirlikçi filtreleme ile zevk ikizini bulur"""
+    # Performans için sadece 30'dan fazla oylanan filmleri matrise alalım
+    popular_movies = ratings_df.groupby('movieId').size()[lambda x: x > 30].index
+    filtered_ratings = ratings_df[ratings_df['movieId'].isin(popular_movies)]
+    
+    matrix = filtered_ratings.pivot_table(index='userId', columns='movieId', values='rating').fillna(0)
+    
+    if target_user_id not in matrix.index:
+        return None, 0
+        
+    # Cosine Similarity ile benzerlik matrisi
+    sim = cosine_similarity(matrix)
+    sim_df = pd.DataFrame(sim, index=matrix.index, columns=matrix.index)
+    
+    # En benzer kullanıcı (kendisi hariç)
+    soulmate_id = sim_df[target_user_id].sort_values(ascending=False).index[1]
+    similarity_score = sim_df.loc[target_user_id, soulmate_id]
+    
+    return soulmate_id, similarity_score
 
-# 2. Kullanıcı Seçimi
-selected_user = st.sidebar.selectbox("Kendi Kullanıcı ID'nizi Seçin:", user_movie_matrix.index)
+# ==========================================
+#  FRONTEND (ARAYÜZ)
+# ==========================================
+
+st.set_page_config(page_title="Movie DNA Analysis", layout="wide")
+movies, ratings = load_data()
+
+# SIDEBAR
+st.sidebar.title("👤 Kullanıcı Seçimi")
+st.sidebar.markdown("Analiz etmek istediğiniz kullanıcıyı listeden seçin veya yazın.")
+
+# 1'den 610'a kadar olan kullanıcı listesi
+user_list = sorted(ratings['userId'].unique())
+selected_user = st.sidebar.selectbox("Kullanıcı ID:", options=user_list, index=17) # Varsayılan User 18
 
 if selected_user:
-    # Kullanıcı vektörünü al
-    user_vec = user_movie_matrix.loc[selected_user].values.reshape(1, -1)
+    user_data, hipster_label, pop_val = get_user_profile(selected_user, ratings, movies)
     
-    # Tüm kullanıcılarla benzerliği (açıyı) hesapla
-    similarities = cosine_similarity(user_vec, user_movie_matrix.values).flatten()
-    sim_series = pd.Series(similarities, index=user_movie_matrix.index).drop(selected_user)
-    
-    # En yakın "Zevk İkizini" bul
-    best_match_id = sim_series.idxmax()
-    similarity_score = sim_series.max()
+    st.title(f"📊 Kullanıcı #{selected_user} - Film Tercih Raporu")
+    st.info(f"Bu analiz, kullanıcının puanladığı **{len(user_data)}** film verisi üzerinden hesaplanmıştır.")
 
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("👤 Senin Profilin")
-        my_top_films = user_movie_matrix.loc[selected_user].sort_values(ascending=False).head(5)
-        st.write("En çok puan verdiğin filmler:")
-        st.write(", ".join(my_top_films[my_top_films > 0].index.tolist()))
-
-    with col2:
-        st.subheader("👯 Zevk İkizin")
-        st.write(f"**Kullanıcı {best_match_id}** ile zevkleriniz **%{similarity_score*100:.1f}** oranında aynı doğrultuda.")
-        match_top_films = user_movie_matrix.loc[best_match_id].sort_values(ascending=False).head(5)
-        st.write("Onun en sevdiği filmler:")
-        st.write(", ".join(match_top_films[match_top_films > 0].index.tolist()))
+    # 1. BÖLÜM: ÜST METRİKLER (GİRİFT ANALİZ)
+    m1, m2, m3 = st.columns(3)
+    with m1:
+        st.metric("İzleyici Tipi", hipster_label)
+        st.caption(f"Popülerlik Endeksi: {int(pop_val)} (Düşük=Daha Özgün)")
+    with m2:
+        # Kullanıcının kendi verdiği puanların ortalamasını % yapalım
+        avg_rating_pct = (user_data['rating'].mean() / 5 * 100)
+        st.metric("Memnuniyet Oranı", f"%{avg_rating_pct:.1f}")
+        st.caption("Verdiği puanların genel ortalaması")
+    with m3:
+        soulmate_id, score = find_soulmate(selected_user, ratings)
+        st.metric("Zevk İkizi", f"User {soulmate_id}")
+        st.caption(f"Zevk Benzerliği: %{score*100:.1f}")
 
     st.divider()
 
-    # 3. SENİN MANTIĞIN: Ortakları Çıkar, Farklı Olanı Öner
-    st.subheader(f"✨ Kullanıcı {best_match_id}'den Sana Özel Öneriler")
+    # 2. BÖLÜM: GÖRSEL ANALİZLER
+    col_left, col_right = st.columns([1, 1])
     
-    # Kural 1: Benim izlemediğim (puanım 0 olan)
-    # Kural 2: Onun çok sevdiği (puanı 4 veya 5 olan)
-    my_ratings = user_movie_matrix.loc[selected_user]
-    match_ratings = user_movie_matrix.loc[best_match_id]
-    
-    # Ortak izlediklerimizi filtrele ve sadece onun bildiği "farklı" filmleri al
-    recommendations = match_ratings[(my_ratings == 0) & (match_ratings >= 4)].sort_values(ascending=False)
-
-    if not recommendations.empty:
-        st.write("Senin henüz keşfetmediğin ama ikizinin bayıldığı şu filmler tam sana göre:")
+    with col_left:
+        st.subheader(" Tür Dağılımı")
+        # Türleri parçalayıp sayma
+        genres_list = "|".join(user_data['genres']).split("|")
+        genre_df = pd.DataFrame(genres_list, columns=['Tür']).value_counts().reset_index(name='Adet')
+        fig_pie = px.pie(genre_df, values='Adet', names='Tür', hole=0.4, 
+                         color_discrete_sequence=px.colors.qualitative.Pastel)
+        st.plotly_chart(fig_pie, use_container_width=True)
         
-        # Daha havalı bir sunum için sütunlara bölelim
-        rec_list = recommendations.index.tolist()[:6]
-        cols = st.columns(3)
-        for i, movie in enumerate(rec_list):
-            cols[i % 3].info(f"🎞️ {movie}")
+    with col_right:
+        st.subheader("⭐ Karakterini Yansıtan Seçimler")
+        # FARK ANALİZİ: Kendi puanı ile toplum başarısı arasındaki farkın en yüksek olduğu filmler
+        # (Yani toplumun sıradan bulduğu ama onun bayıldığı filmler)
+        favs = user_data[user_data['rating'] >= 4].copy()
+        favs['diff'] = (favs['rating'] * 20) - favs['success_rate']
+        
+        # En "karakteristik" 5 film
+        unique_choices = favs.sort_values('diff', ascending=False).head(5)
+        
+        for _, row in unique_choices.iterrows():
+            st.write(f"**{row['title']}**")
+            st.caption(f"Senin Puanın: {row['rating']} | Toplum Başarısı: %{row['success_rate']}")
             
-        # Neden Öneriyoruz Açıklaması
-        st.caption(f"💡 Not: Bu filmler, Kullanıcı {best_match_id} ile aranızdaki **'bilgi farkından'** süzülerek gelmiştir.")
-    else:
-        st.warning("İnanılmaz! Zevk ikizinin izlediği her şeyi sen de izlemişsin. Yeni bir ikiz aramalıyız.")
+            # Eğer toplumdan çok daha yüksek vermişse bilgi notu çıkar
+            if row['diff'] > 15:
+                st.info(f"💡 Bu senin gizli favorin! Toplumdan %{int(row['diff'])} daha fazla sevmişsin.")
+            st.progress(row['success_rate']/100)
 
-    # 4. Doğrultu Kanıtı (Bonus Görselleştirme)
+    # 3. BÖLÜM: TAVSİYELER
     st.divider()
-    st.subheader("📊 Ortak Nokta Analizi")
-    common_movies = user_movie_matrix.loc[[selected_user, best_match_id], (user_movie_matrix.loc[selected_user] > 0) & (user_movie_matrix.loc[best_match_id] > 0)]
-    if not common_movies.empty:
-        st.write("İkinizin de izleyip benzer puanlar verdiği filmler (Bu sizin 'Aynı Doğrultu'da olduğunuzun ispatıdır):")
-        st.dataframe(common_movies.T.head(10))
+    st.header(f" Zevk İkizinden (User {soulmate_id}) Sana Özel Öneriler")
+    
+    # Ruh ikizinin yüksek puan verdiği ama kullanıcının henüz izlemediği filmler
+    soulmate_ratings = ratings[ratings['userId'] == soulmate_id]
+    watched_ids = user_data['movieId'].tolist()
+    
+    recommendations = soulmate_ratings[(soulmate_ratings['rating'] >= 4) & (~soulmate_ratings['movieId'].isin(watched_ids))]
+    recom_display = recommendations.merge(movies, on='movieId').sort_values('success_rate', ascending=False).head(3)
+
+    if not recom_display.empty:
+        cols = st.columns(3)
+        for i, (_, row) in enumerate(recom_display.iterrows()):
+            with cols[i]:
+                st.success(f"**{row['title']}**")
+                st.write(f" Tür: {row['genres']}")
+                st.write(f" Toplum Puanı: %{row['success_rate']}")
+                st.progress(row['success_rate']/100)
+    else:
+        st.write("Şu an için ruh ikizinden yeni bir öneri bulunmuyor.")
