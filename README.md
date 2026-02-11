@@ -24,3 +24,6 @@ Bu proje, MovieLens veri seti kullanılarak geliştirilmiş, üç farklı tavsiy
 1. Depoyu klonlayın:
    ```bash
    git clone [https://github.com/HASANEMRE666/netflix1.git](https://github.com/HASANEMRE666/netflix1.git)
+
+2. Streamlit linki:
+   https://netflix1-zdhteeepn584ngbdss2anv.streamlit.app/
