@@ -25,5 +25,11 @@ Bu proje, MovieLens veri seti kullanılarak geliştirilmiş, üç farklı tavsiy
    ```bash
    git clone [https://github.com/HASANEMRE666/netflix1.git](https://github.com/HASANEMRE666/netflix1.git)
 
+# Projeyi indirin, klasöre girin, kütüphaneleri yükleyin ve uygulamayı başlatın
+git clone https://github.com/HASANEMRE666/netflix1.git 
+cd netflix1 
+pip install -r requirements.txt 
+streamlit run netflix.py
+
 2. Streamlit linki:
    https://netflix1-zdhteeepn584ngbdss2anv.streamlit.app/
